@@ -4,6 +4,7 @@
 // to either a blob (file) or another tree (subdirectory), along with
 // the file mode (permissions + type).
 
+
 #ifndef TREE_H
 #define TREE_H
 
