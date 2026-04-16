@@ -1,33 +1,41 @@
-// index.c — Staging area implementation
-//
-// Text format of .pes/index (one entry per line, sorted by path):
-//
-//   <mode-octal> <64-char-hex-hash> <mtime-seconds> <size> <path>
-//
-// Example:
-//   100644 a1b2c3d4e5f6...  1699900000 42 README.md
-//   100644 f7e8d9c0b1a2...  1699900100 128 src/main.c
-//
-// This is intentionally a simple text format. No magic numbers, no
-// binary parsing. The focus is on the staging area CONCEPT (tracking
-// what will go into the next commit) and ATOMIC WRITES (temp+rename).
-//
-// PROVIDED functions: index_find, index_remove, index_status
-// TODO functions:     index_load, index_save, index_add
+// ───────────── Header Files for Index Module ─────────────
 
+// Provides definitions for Index, IndexEntry, and related functions
 #include "index.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <dirent.h>
 
+// Provides core PES structures and object storage functions (e.g., object_write)
+#include "pes.h"
+
+
+// ───────────── Standard Library Headers ─────────────
+
+// Input/output operations (fopen, fread, fwrite, printf, etc.)
+#include <stdio.h>
+
+// Memory management (malloc, free, exit)
+#include <stdlib.h>
+
+// String manipulation functions (strcmp, strcpy, strlen, memcpy, etc.)
+#include <string.h>
+
+
+// ───────────── System Headers ─────────────
+
+// File metadata operations (stat, file size, modification time)
+#include <sys/stat.h>
+
+// File control options (low-level file descriptors, flags)
+#include <fcntl.h>
+
+// POSIX system calls (read, write, close, access, etc.)
+#include <unistd.h>
+
+// Directory handling (opendir, readdir, closedir)
+#include <dirent.h>
 // ─── PROVIDED ────────────────────────────────────────────────────────────────
 
-// Find an index entry by path (linear scan).
 IndexEntry* index_find(Index *index, const char *path) {
+    //Loop to tun till index->count ad compare the string using strcmp and return entries
     for (int i = 0; i < index->count; i++) {
         if (strcmp(index->entries[i].path, path) == 0)
             return &index->entries[i];
@@ -35,8 +43,6 @@ IndexEntry* index_find(Index *index, const char *path) {
     return NULL;
 }
 
-// Remove a file from the index.
-// Returns 0 on success, -1 if path not in index.
 int index_remove(Index *index, const char *path) {
     for (int i = 0; i < index->count; i++) {
         if (strcmp(index->entries[i].path, path) == 0) {
@@ -52,16 +58,10 @@ int index_remove(Index *index, const char *path) {
     return -1;
 }
 
-// Print the status of the working directory.
-//
-// Identifies files that are staged, unstaged (modified/deleted in working dir),
-// and untracked (present in working dir but not in index).
-// Returns 0.
 int index_status(const Index *index) {
     printf("Staged changes:\n");
     int staged_count = 0;
-    // Note: A true Git implementation deeply diffs against the HEAD tree here. 
-    // For this lab, displaying indexed files represents the staging intent.
+
     for (int i = 0; i < index->count; i++) {
         printf("  staged:     %s\n", index->entries[i].path);
         staged_count++;
@@ -71,14 +71,15 @@ int index_status(const Index *index) {
 
     printf("Unstaged changes:\n");
     int unstaged_count = 0;
+
     for (int i = 0; i < index->count; i++) {
         struct stat st;
         if (stat(index->entries[i].path, &st) != 0) {
             printf("  deleted:    %s\n", index->entries[i].path);
             unstaged_count++;
         } else {
-            // Fast diff: check metadata instead of re-hashing file content
-            if (st.st_mtime != (time_t)index->entries[i].mtime_sec || st.st_size != (off_t)index->entries[i].size) {
+            if (st.st_mtime != (time_t)index->entries[i].mtime_sec ||
+                st.st_size != (off_t)index->entries[i].size) {
                 printf("  modified:   %s\n", index->entries[i].path);
                 unstaged_count++;
             }
@@ -89,29 +90,28 @@ int index_status(const Index *index) {
 
     printf("Untracked files:\n");
     int untracked_count = 0;
+
     DIR *dir = opendir(".");
     if (dir) {
         struct dirent *ent;
         while ((ent = readdir(dir)) != NULL) {
-            // Skip hidden directories, parent directories, and build artifacts
             if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) continue;
             if (strcmp(ent->d_name, ".pes") == 0) continue;
-            if (strcmp(ent->d_name, "pes") == 0) continue; // compiled executable
-            if (strstr(ent->d_name, ".o") != NULL) continue; // object files
+            if (strcmp(ent->d_name, "pes") == 0) continue;
+            if (strstr(ent->d_name, ".o") != NULL) continue;
 
-            // Check if file is tracked in the index
-            int is_tracked = 0;
+            int tracked = 0;
             for (int i = 0; i < index->count; i++) {
                 if (strcmp(index->entries[i].path, ent->d_name) == 0) {
-                    is_tracked = 1; 
+                    tracked = 1;
                     break;
                 }
             }
-            
-            if (!is_tracked) {
+
+            if (!tracked) {
                 struct stat st;
                 stat(ent->d_name, &st);
-                if (S_ISREG(st.st_mode)) { // Only list regular files for simplicity
+                if (S_ISREG(st.st_mode)) {
                     printf("  untracked:  %s\n", ent->d_name);
                     untracked_count++;
                 }
@@ -119,57 +119,205 @@ int index_status(const Index *index) {
         }
         closedir(dir);
     }
+
     if (untracked_count == 0) printf("  (nothing to show)\n");
     printf("\n");
 
     return 0;
 }
 
-// ─── TODO: Implement these ───────────────────────────────────────────────────
+// ─── YOUR IMPLEMENTATION ─────────────────────────────────────────────────────
 
-// Load the index from .pes/index.
-//
-// HINTS - Useful functions:
-//   - fopen (with "r"), fscanf, fclose : reading the text file line by line
-//   - hex_to_hash                      : converting the parsed string to ObjectID
-//
-// Returns 0 on success, -1 on error.
-int index_load(Index *index) {
-    // TODO: Implement index loading
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+// ───────────── Load Index from Disk ─────────────
+// Reads the staging area (.pes/index) into memory
+// and populates the Index structure.
+
+int index_load(Index *idx) {
+
+    // Open index file in binary read mode
+    FILE *fp = fopen(".pes/index", "rb");
+
+
+    // ───────────── Case: Index file does not exist ─────────────
+    // This happens on first run (no files staged yet)
+    if (!fp) {
+        idx->count = 0;   // Initialize empty index
+        return 0;
+    }
+
+
+    // ───────────── Step 1: Read number of entries ─────────────
+    fread(&idx->count, sizeof(int), 1, fp);
+
+
+    // ───────────── Step 2: Validate entry count ─────────────
+    // Prevent overflow or corrupted index file
+    if (idx->count > MAX_INDEX_ENTRIES) {
+        fclose(fp);
+        return -1;
+    }
+
+
+    // ───────────── Step 3: Read all entries ─────────────
+    fread(
+        idx->entries,
+        sizeof(IndexEntry),
+        idx->count,
+        fp
+    );
+
+
+    // ───────────── Step 4: Close file ─────────────
+    fclose(fp);
+
+
+    // ───────────── Load successful ─────────────
+    return 0;
 }
 
-// Save the index to .pes/index atomically.
-//
-// HINTS - Useful functions and syscalls:
-//   - qsort                            : sorting the entries array by path
-//   - fopen (with "w"), fprintf        : writing to the temporary file
-//   - hash_to_hex                      : converting ObjectID for text output
-//   - fflush, fileno, fsync, fclose    : flushing userspace buffers and syncing to disk
-//   - rename                           : atomically moving the temp file over the old index
-//
-// Returns 0 on success, -1 on error.
-int index_save(const Index *index) {
-    // TODO: Implement atomic index saving
-    // (See Lab Appendix for logical steps)
-    (void)index;
-    return -1;
+
+
+// ───────────── Save Index to Disk ─────────────
+// Writes the current staging area into .pes/index
+// in binary format.
+
+int index_save(const Index *idx) {
+
+    // Open index file in binary write mode
+    FILE *fp = fopen(".pes/index", "wb");
+
+    // Check if file opening failed
+    if (!fp) {
+        return -1;
+    }
+
+
+    // ───────────── Step 1: Write entry count ─────────────
+    fwrite(
+        &idx->count,
+        sizeof(int),
+        1,
+        fp
+    );
+
+
+    // ───────────── Step 2: Write index entries ─────────────
+    fwrite(
+        idx->entries,
+        sizeof(IndexEntry),
+        idx->count,
+        fp
+    );
+
+
+    // ───────────── Step 3: Close file ─────────────
+    fclose(fp);
+
+
+    // ───────────── Save successful ─────────────
+    return 0;
 }
 
-// Stage a file for the next commit.
-//
-// HINTS - Useful functions and syscalls:
-//   - fopen, fread, fclose             : reading the target file's contents
-//   - object_write                     : saving the contents as OBJ_BLOB
-//   - stat / lstat                     : getting file metadata (size, mtime, mode)
-//   - index_find                       : checking if the file is already staged
-//
-// Returns 0 on success, -1 on error.
-int index_add(Index *index, const char *path) {
-    // TODO: Implement file staging
-    // (See Lab Appendix for logical steps)
-    (void)index; (void)path;
-    return -1;
+// ───────────── Add File to Index (Staging Area) ─────────────
+// This function:
+// 1. Reads file contents
+// 2. Stores it as a blob object
+// 3. Updates or inserts entry in index
+// 4. Saves index to disk
+
+int index_add(Index *idx, const char *path) {
+
+    // ───────────── Step 1: Open file ─────────────
+    FILE *fp = fopen(path, "rb");
+
+    if (!fp) {
+        return -1;   // File could not be opened
+    }
+
+
+    // ───────────── Step 2: Determine file size ─────────────
+    fseek(fp, 0, SEEK_END);
+
+    long size = ftell(fp);
+
+    rewind(fp);
+
+
+    // ───────────── Step 3: Allocate buffer ─────────────
+    void *data = malloc(size);
+
+    if (!data) {
+        fclose(fp);
+        return -1;
+    }
+
+
+    // ───────────── Step 4: Read file content ─────────────
+    fread(data, 1, size, fp);
+
+    fclose(fp);
+
+
+    // ───────────── Step 5: Store file as blob object ─────────────
+    ObjectID id;
+
+    if (object_write(OBJ_BLOB, data, size, &id) != 0) {
+        free(data);
+        return -1;
+    }
+
+    // Free temporary buffer
+    free(data);
+
+
+    // ───────────── Step 6: Get file metadata ─────────────
+    struct stat st;
+
+    if (stat(path, &st) != 0) {
+        return -1;
+    }
+
+
+    // ───────────── Step 7: Check if file already exists in index ─────────────
+    for (int i = 0; i < idx->count; i++) {
+
+        if (strcmp(idx->entries[i].path, path) == 0) {
+
+            // Update existing entry
+            idx->entries[i].hash = id;
+            idx->entries[i].size = st.st_size;
+            idx->entries[i].mtime_sec = st.st_mtime;
+            idx->entries[i].mode = st.st_mode;
+
+            // Save updated index to disk
+            return index_save(idx);   // 🔥 critical
+        }
+    }
+
+
+    // ───────────── Step 8: Add new entry ─────────────
+    if (idx->count >= MAX_INDEX_ENTRIES) {
+        return -1;   // Prevent overflow
+    }
+
+
+    // Store file path
+    strcpy(idx->entries[idx->count].path, path);
+
+    // Store hash (blob reference)
+    idx->entries[idx->count].hash = id;
+
+    // Store metadata
+    idx->entries[idx->count].size = st.st_size;
+    idx->entries[idx->count].mtime_sec = st.st_mtime;
+    idx->entries[idx->count].mode = st.st_mode;
+
+
+    // Increment entry count
+    idx->count++;
+
+
+    // ───────────── Step 9: Save index to disk ─────────────
+    // This ensures persistence since pes.c does NOT call index_save()
+    return index_save(idx);
 }
